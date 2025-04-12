@@ -156,9 +156,11 @@ def finish_quiz():
 
 def go_to_sheet_select(category):
     """Sets state for sheet selection screen."""
+    print(f"DEBUG: go_to_sheet_select called with category: {category}") # Add Debug Print
     st.session_state.selected_category = category
-    st.session_state.screen = 'sheet_select' # Corrected screen state name
-    reset_quiz_state()
+    st.session_state.screen = 'sheet_select'
+    reset_quiz_state() # Reset quiz progress when changing category
+    st.rerun() # <<< ADD EXPLICIT RERUN
 
 def start_quiz(category, sheet):
     """Filters pre-loaded questions, sets state to start quiz."""
