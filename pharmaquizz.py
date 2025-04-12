@@ -263,7 +263,12 @@ elif current_screen == 'quiz':
             if options_key not in st.session_state: options = current_q['options'][:]; random.shuffle(options); st.session_state[options_key] = options;
             options_to_display = st.session_state[options_key]; question_submitted = st.session_state.submission_status.get(q_index, False); disable_radio = question_submitted;
             current_selection = st.session_state.user_answers.get(q_index, None); current_index = None;
-            if current_selection is not None and current_selection in options_to_display: try: current_index = options_to_display.index(current_selection); except ValueError: current_index = None;
+            if current_selection is not None and current_selection in options_to_display:
+                 # Correctly indented try/except block
+                 try:
+                     current_index = options_to_display.index(current_selection)
+                 except ValueError:
+                     current_index = None # Handle case where selection isn't in options (shouldn't happen often)
 
             # Use unique key for radio button tied to question index
             radio_key = f'quiz_option_{q_index}'
