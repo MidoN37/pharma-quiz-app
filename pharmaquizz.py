@@ -45,9 +45,47 @@ category_names = CATEGORY_SUBDIRS
 
 
 # --- Helper Functions ---
-def normalize_text(text): # ... (Identical) ...
-def find_column_by_keyword(header_series, keywords): # ... (Identical) ...
+def normalize_text(text):
+    """Lowercase, NFC normalize, remove accents, basic cleanup."""
+    if not isinstance(text, str): text = str(text)
+    try:
+        normalized = unicodedata.normalize('NFC', text); ascii_text = unidecode(normalized)
+    except Exception: ascii_text = text
+    cleaned = re.sub(r'[^\w\s\-]+', '', ascii_text).lower().strip(); cleaned = re.sub(r'\s+', ' ', cleaned);
+    return cleaned
 
+def find_column_by_keyword(header_series, keywords):
+    """Finds column NAME by keyword in a header row (pandas Series). Case-insensitive."""
+    # --- START Function Body ---
+    if header_series is None or header_series.empty: return None
+    header_values_lower = header_series.astype(str).str.lower().str.strip().tolist()
+    original_headers = header_series.astype(str).tolist()
+
+    # Prioritize exact keyword match
+    for keyword in keywords:
+        kw_lower = keyword.lower().strip()
+        if kw_lower in header_values_lower:
+            try:
+                 idx = header_values_lower.index(kw_lower)
+                 return original_headers[idx]; # Return original header name
+            except ValueError:
+                 pass; # Should not happen if 'in' is true, but safe practice
+
+    # Then check if keyword is contained within a header cell
+    for keyword in keywords:
+        kw_lower = keyword.lower().strip()
+        try:
+            for i, header in enumerate(header_values_lower):
+                if kw_lower in header:
+                    return original_headers[i]; # Return original header name
+        except Exception:
+            pass; # Ignore errors during substring check
+    return None # No match found
+    # --- END Function Body ---
+
+# --- Data Loading and Preparation ---
+@st.cache_data(show_spinner="Loading medication data...")
+def load_and_prepare_sheet_data(excel_path_str, sheet_name):
 
 # --- Load ALL Quiz Data From CSV (Cached) ---
 @st.cache_data(show_spinner="Loading quiz questions...")
