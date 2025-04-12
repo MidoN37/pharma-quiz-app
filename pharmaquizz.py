@@ -95,6 +95,18 @@ def reset_quiz_state():
      # Also reset the generic key just in case
      if 'quiz_option' in st.session_state: del st.session_state['quiz_option']
 
+# --- ADD THIS FUNCTION DEFINITION ---
+def reset_and_select_category():
+     """Resets all state and goes back to category selection screen."""
+     # This function essentially does the same as go_to_category_select
+     # We can call that directly or keep this for clarity if preferred
+     go_to_category_select()
+     # Alternatively, duplicate the logic:
+     # st.session_state.screen = 'category_select'
+     # st.session_state.selected_category = None
+     # st.session_state.selected_sheet = None
+     # reset_quiz_state() # Call the main reset
+# --- END OF ADDED FUNCTION ---
 
 def submit_answer():
     """Callback for Submit button. Marks question as submitted and scores if correct."""
