@@ -9,13 +9,10 @@ import unicodedata
 import re
 
 # Need unidecode: pip install unidecode
-try:
-    from unidecode import unidecode
+try: from unidecode import unidecode
 except ImportError:
     def unidecode(x):
-        if 'unidecode_warning_shown' not in st.session_state:
-            st.warning("`unidecode` library missing (pip install unidecode).")
-            st.session_state.unidecode_warning_shown = True
+        if 'unidecode_warning_shown' not in st.session_state: st.warning("`unidecode` missing."); st.session_state.unidecode_warning_shown = True
         return str(x)
 
 # --- Page Config ---
@@ -24,17 +21,41 @@ st.set_page_config(layout="wide", page_title="Pharm Quiz")
 # --- Project Setup ---
 APP_DIR = Path(__file__).parent
 PROJECT_ROOT = APP_DIR
+EXCEL_DATA_ROOT = PROJECT_ROOT / "excel_data"
 QUIZ_CSV_PATH = PROJECT_ROOT / "QUIZ" / "quiz_data_v2.csv" # Path to generated CSV
 
-# --- Load Quiz Data from CSV ---
+# --- Configuration ---
+# Use categories matching folder names
+CATEGORY_SUBDIRS = ["Antibiotiques", "Comprimés", "Comprimes antalgiques", "Cremes - Pommades", "Gouttes", "Injections", "Ovules vaginaux", "Pulvérisations", "Sachets", "Sirop", "Suppositoires"]
+# Define expected header variations
+MED_NAME_COLS = ['Spécialité', 'Nom', 'Médicament', 'Antibiotiques sachet', 'Antibiotiques sirop', 'Antibiotiques comprimé', 'Comprimés', 'ANTALGIQUES', 'Cremes', 'Gouttes', 'Injections', 'Ovules vaginaux', 'Pulvérisations', 'Sachets', 'Sirop', 'Suppositoires']
+COMPOSITION_COLS = ['Composition', 'Composant(s)', 'Actif(s)', 'Compositions']
+INDICATION_COLS = ['Indication(s)', 'Indications', 'Usage(s)', 'Indiquations', 'Indications (Usage simple pour un patient non-médical)', 'Classe thérapeutique']
+
+# --- Populate Category Path Map (for Excel if needed - not used by quiz from CSV) ---
+# This map isn't actually used if we only read the final CSV, but harmless to keep for now
+category_excel_path_map = {}
+for sub_dir in CATEGORY_SUBDIRS:
+    normalized_subdir_name = sub_dir
+    if normalized_subdir_name == "Cremes - Pommades": excel_filename = "Pommade - Cremes.xlsx"
+    else: excel_filename = f"{normalized_subdir_name}.xlsx"
+    excel_file_path = EXCEL_DATA_ROOT / normalized_subdir_name / excel_filename
+    category_excel_path_map[normalized_subdir_name] = str(excel_file_path)
+category_names = CATEGORY_SUBDIRS
+
+
+# --- Helper Functions ---
+def normalize_text(text): # ... (Identical) ...
+def find_column_by_keyword(header_series, keywords): # ... (Identical) ...
+
+
+# --- Load ALL Quiz Data From CSV (Cached) ---
 @st.cache_data(show_spinner="Loading quiz questions...")
 def load_quiz_from_csv(path):
     """Loads quiz questions directly from the pre-generated CSV file."""
     print(f"Attempting to load quiz data from: {path}")
     try:
-        if not path.exists():
-            st.error(f"Quiz data CSV not found at: {path}. Please run the generation script.")
-            return None
+        if not path.exists(): st.error(f"Quiz CSV not found: {path}. Run generator script."); return None
         try: df = pd.read_csv(path, keep_default_na=False, encoding='utf-8-sig')
         except UnicodeDecodeError: print("UTF-8-SIG failed, trying UTF-8..."); df = pd.read_csv(path, keep_default_na=False, encoding='utf-8')
         print(f"Loaded {len(df)} questions from CSV.")
@@ -45,6 +66,7 @@ def load_quiz_from_csv(path):
             if all(k in entry and pd.notna(entry[k]) for k in ['category', 'sheet', 'med_name', 'question', 'correct_answer']) and entry['options']: questions.append(entry)
             else: print(f"Skipping invalid row from CSV: {row.to_dict()}")
         print(f"Filtered to {len(questions)} valid questions.")
+        if not questions: st.warning(f"CSV '{path.name}' loaded but no valid questions found.")
         return questions
     except Exception as e: st.error(f"Failed to load/process Quiz CSV '{path.name}': {e}"); return None
 
@@ -56,12 +78,14 @@ CATEGORIES = []
 SHEETS_BY_CATEGORY = {}
 if ALL_QUIZ_QUESTIONS:
     CATEGORIES = sorted(list(set(q['category'] for q in ALL_QUIZ_QUESTIONS)))
-    for cat in CATEGORIES:
-        SHEETS_BY_CATEGORY[cat] = sorted(list(set(q['sheet'] for q in ALL_QUIZ_QUESTIONS if q['category'] == cat)))
+    for cat in CATEGORIES: SHEETS_BY_CATEGORY[cat] = sorted(list(set(q['sheet'] for q in ALL_QUIZ_QUESTIONS if q['category'] == cat)))
+else:
+     st.error("Could not load any questions from CSV. Cannot proceed.")
+     # Optionally stop execution if critical data is missing
+     # st.stop()
 
 
 # --- Initialize Session State ---
-# Needs to be done early, BEFORE functions that might access it are called
 if 'selected_category' not in st.session_state: st.session_state.selected_category = None
 if 'selected_sheet' not in st.session_state: st.session_state.selected_sheet = None
 if 'quiz_questions' not in st.session_state: st.session_state.quiz_questions = []
@@ -76,9 +100,56 @@ if 'correctly_answered_indices' not in st.session_state: st.session_state.correc
 
 
 # --- Helper Functions for State Updates ---
-# DEFINE FUNCTIONS *BEFORE* THEY ARE CALLED IN THE MAIN LAYOUT LOGIC
+def submit_answer():
+    q_index = st.session_state.current_q_index
+    # Use dynamic key for radio button value
+    radio_key = f'quiz_option_{q_index}'
+    selected_option = st.session_state.get(radio_key)
+
+    if selected_option is not None and q_index < len(st.session_state.quiz_questions):
+         st.session_state.user_answers[q_index] = selected_option
+         st.session_state.submission_status[q_index] = True
+         correct = (selected_option == st.session_state.quiz_questions[q_index]['correct_answer'])
+         if correct and q_index not in st.session_state.correctly_answered_indices:
+             st.session_state.score += 1
+             st.session_state.correctly_answered_indices.add(q_index)
+    # No rerun here - handled by button interaction
+
+def go_to_question(target_index):
+    num_questions = len(st.session_state.quiz_questions)
+    if 0 <= target_index < num_questions:
+        st.session_state.current_q_index = target_index
+    else: print(f"Warning: Invalid jump target index: {target_index}")
+    # No rerun here
+
+def next_question():
+    q_index = st.session_state.current_q_index
+    num_questions = len(st.session_state.quiz_questions)
+    if q_index < num_questions - 1:
+        st.session_state.current_q_index += 1 # Directly increment index
+        st.session_state.submission_status[q_index+1] = st.session_state.submission_status.get(q_index+1, False) # Keep next q submission status
+        st.session_state.current_options = [] # Force reshuffle for next question
+        # Radio key for next question will be generated dynamically
+    else:
+        finish_quiz() # Go to results if already on last question
+    # No rerun needed immediately, state change triggers it if necessary via button click
+
+# --- CORRECTED finish_quiz function ---
+def finish_quiz():
+     """Ends the quiz and sets state for results screen."""
+     print("DEBUG: finish_quiz called") # Debug
+     st.session_state.quiz_complete = True
+     st.session_state.quiz_active = False
+     # Set index past end to stop quiz loop cleanly
+     st.session_state.current_q_index = len(st.session_state.get('quiz_questions', []))
+     # No need to reset options/radio state here, results screen doesn't use them
+     # st.rerun() # Avoid explicit rerun in callback
+
 def reset_quiz_state():
-     """Resets all quiz-related progress variables in session state."""
+     """Resets session state variables related to quiz progress AND selection."""
+     print("DEBUG: reset_quiz_state called") # Debug
+     st.session_state.selected_category = None
+     st.session_state.selected_sheet = None
      st.session_state.quiz_questions = []
      st.session_state.current_q_index = 0
      st.session_state.score = 0
@@ -88,234 +159,140 @@ def reset_quiz_state():
      st.session_state.quiz_active = False
      st.session_state.quiz_complete = False
      st.session_state.correctly_answered_indices = set()
-     # Clear dynamic radio key if it exists
-     q_index_key = st.session_state.get('current_q_index', 0) # Get current index if possible
-     radio_key = f'quiz_option_{q_index_key}'
-     if radio_key in st.session_state: del st.session_state[radio_key]
-     # Also reset the generic key just in case
-     if 'quiz_option' in st.session_state: del st.session_state['quiz_option']
+     # Clear dynamic radio keys (best effort)
+     keys_to_delete = [k for k in st.session_state if k.startswith('quiz_option_')]
+     for k in keys_to_delete: del st.session_state[k]
 
-# --- ADD THIS FUNCTION DEFINITION ---
-def reset_and_select_category():
-     """Resets all state and goes back to category selection screen."""
-     # This function essentially does the same as go_to_category_select
-     # We can call that directly or keep this for clarity if preferred
-     go_to_category_select()
-     # Alternatively, duplicate the logic:
-     # st.session_state.screen = 'category_select'
-     # st.session_state.selected_category = None
-     # st.session_state.selected_sheet = None
-     # reset_quiz_state() # Call the main reset
-# --- END OF ADDED FUNCTION ---
-
-def submit_answer():
-    """Callback for Submit button. Marks question as submitted and scores if correct."""
-    q_index = st.session_state.current_q_index
-    # Use the dynamic key to read the radio button's current value
-    selected_option = st.session_state.get(f'quiz_option_{q_index}', None) # Read specific key
-
-    if selected_option is not None and q_index < len(st.session_state.quiz_questions):
-         st.session_state.user_answers[q_index] = selected_option
-         st.session_state.submission_status[q_index] = True
-
-         correct = (selected_option == st.session_state.quiz_questions[q_index]['correct_answer'])
-         if correct and q_index not in st.session_state.correctly_answered_indices:
-             st.session_state.score += 1
-             st.session_state.correctly_answered_indices.add(q_index)
-
-
-def go_to_question(target_index):
-    """Callback for number buttons. Jumps to a specific question."""
-    num_questions = len(st.session_state.quiz_questions)
-    if 0 <= target_index < num_questions:
-        st.session_state.current_q_index = target_index
-        # Don't reset submission status on jump
-        # Don't reshuffle options on jump
-    else:
-        print(f"Warning: Invalid jump target index: {target_index}")
-
-def next_question():
-    """Moves to the next question index or finishes."""
-    q_index = st.session_state.current_q_index
-    num_questions = len(st.session_state.quiz_questions)
-    if q_index < num_questions - 1:
-        go_to_question(q_index + 1) # Use jump function to move index
-    else:
-        finish_quiz() # Go to results if already on last question
-
-def finish_quiz():
-     """Ends the quiz and goes to the results screen."""
-     st.session_state.quiz_complete = True
-     st.session_state.quiz_active = False
-     st.session_state.current_q_index = len(st.session_state.quiz_questions) # Set past end
-     st.session_state.current_options = []
-     # Clean up last radio key if exists
-     q_index_key = st.session_state.get('current_q_index', 0)
-     radio_key = f'quiz_option_{q_index_key}'
-     if radio_key in st.session_state: del st.session_state[radio_key]
-
-def go_to_sheet_select(category):
-    """Sets state for sheet selection screen."""
-    print(f"DEBUG: go_to_sheet_select called with category: {category}") # Add Debug Print
-    st.session_state.selected_category = category
-    st.session_state.screen = 'sheet_select'
-    reset_quiz_state() # Reset quiz progress when changing category
-    st.rerun() # <<< ADD EXPLICIT RERUN
 
 def start_quiz(category, sheet):
     """Filters pre-loaded questions, sets state to start quiz."""
     print(f"Starting quiz for: {category} - {sheet}")
-    reset_quiz_state() # Reset score/progress first
+    reset_quiz_state() # Reset previous quiz state first
     st.session_state.selected_category = category
     st.session_state.selected_sheet = sheet
 
-    # Filter ALL_QUIZ_QUESTIONS for the selected category and sheet
-    filtered_questions = [
-        q for q in ALL_QUIZ_QUESTIONS
-        if q.get('category') == category and q.get('sheet') == sheet # Use .get for safety
-    ]
+    filtered_questions = [q for q in ALL_QUIZ_QUESTIONS if q.get('category') == category and q.get('sheet') == sheet]
 
     if not filtered_questions:
         st.error(f"No questions found for {category} - {sheet} in the loaded data.")
-        st.session_state.quiz_active = False # Ensure quiz doesn't start
-        return # Stop if no questions
+        st.session_state.quiz_active = False; return;
 
-    random.shuffle(filtered_questions) # Shuffle questions for this quiz session
+    random.shuffle(filtered_questions)
     st.session_state.quiz_questions = filtered_questions
     st.session_state.quiz_active = True # Activate quiz display
-    st.session_state.quiz_complete = False # Ensure complete flag is off
-    # No rerun needed here IF start_quiz is called from a button's on_click
-    # If called programmatically (like single sheet case), rerun IS needed after this.
+    st.session_state.quiz_complete = False
+    print(f"DEBUG: Quiz started. Questions loaded: {len(st.session_state.quiz_questions)}")
+    # st.rerun() # REMOVED - Let button click trigger rerun
 
-
-def go_to_category_select():
-    """Sets state for category selection screen."""
-    st.session_state.screen = 'category_select'
-    st.session_state.selected_category = None
-    st.session_state.selected_sheet = None
-    reset_quiz_state()
+def reset_and_select_category():
+     """Resets all state and goes back to category selection screen."""
+     # This function essentially does the same as reset_quiz_state and ensures selection is clear
+     reset_quiz_state()
+     st.session_state.selected_category = None # Ensure category is cleared too
+     st.session_state.selected_sheet = None
+     # No explicit screen variable needed now
+     # st.rerun() # Rerun triggered by button click automatically
 
 
 # --- Streamlit App UI ---
 st.title("💊 Pharma Quiz 💊")
 
-# --- Determine which screen to show based on state ---
-current_screen = st.session_state.get('screen', 'category_select')
+# --- Quiz Selection Area ---
+# Show selection only if quiz is NOT active AND NOT complete
+if not st.session_state.quiz_active and not st.session_state.quiz_complete:
+    st.header("Select Quiz")
 
-# == Category Selection Screen ==
-if current_screen == 'category_select':
-    st.header("Select Quiz Category")
-    st.write("Choose a pharmaceutical category.")
-    cols = st.columns(4)
-    col_idx = 0
-    if not CATEGORIES: st.error("No categories found in loaded data.")
+    if not ALL_QUIZ_QUESTIONS:
+        st.error("Quiz data could not be loaded. Please check 'QUIZ/quiz_data_v2.csv'.")
     else:
-        for category_name in CATEGORIES:
-             # Check if this category has available sheets
-             if category_name in SHEETS_BY_CATEGORY and SHEETS_BY_CATEGORY[category_name]:
-                 button_col = cols[col_idx % len(cols)];
-                 with button_col: st.button(category_name, key=f"cat_{category_name}", on_click=go_to_sheet_select, args=(category_name,));
-                 col_idx += 1;
-        if col_idx == 0: st.warning("No categories with quiz data available.")
+        # Category Selectbox
+        selected_category = st.selectbox(
+            "Choose a Category:", options=[""] + CATEGORIES,
+            format_func=lambda x: "Select Category..." if x == "" else x, key='cat_select_dd'
+        )
+        selected_sheet = None
+        if selected_category:
+            available_sheets_for_cat = SHEETS_BY_CATEGORY.get(selected_category, [])
+            if len(available_sheets_for_cat) == 1:
+                selected_sheet = available_sheets_for_cat[0]; st.write(f"Sheet: **{selected_sheet}**")
+            elif len(available_sheets_for_cat) > 1:
+                selected_sheet = st.selectbox("Choose a Sheet:", options=[""] + available_sheets_for_cat, format_func=lambda x: "Select Sheet..." if x == "" else x, key='sheet_select_dd')
+            else: st.warning(f"No valid sheets found for '{selected_category}'.")
 
-# == Sheet Selection Screen ==
-elif current_screen == 'sheet_select':
-    category = st.session_state.selected_category
-    st.header(f"Category: {category}")
-    st.button("⬅️ Back to Categories", key="back_cat", on_click=go_to_category_select)
+        # Start Quiz Button -> Calls start_quiz on click
+        start_disabled = not (selected_category and selected_sheet)
+        if st.button("Start Quiz", disabled=start_disabled, key="start_quiz_btn"):
+            if selected_category and selected_sheet:
+                 start_quiz(selected_category, selected_sheet)
+                 # Rerun is handled implicitly by button click causing state change
+            else: st.warning("Please select Category and Sheet.")
+
     st.markdown("---")
 
-    available_sheets_for_cat = SHEETS_BY_CATEGORY.get(category, [])
 
-    if not available_sheets_for_cat:
-        st.warning(f"No valid sheets found for category '{category}'.")
-        # Optionally provide button to go back
-        st.button("Go Back", on_click=go_to_category_select)
-    elif len(available_sheets_for_cat) == 1:
-        selected_sheet = available_sheets_for_cat[0]
-        st.info(f"Starting quiz for the only available sheet: {selected_sheet}...")
-        # Set state and trigger rerun - quiz generation happens on next screen load
-        st.session_state.selected_sheet = selected_sheet;
-        st.session_state.screen = 'quiz';
-        # Call reset here explicitly before rerun maybe?
-        reset_quiz_state() # Ensure clean slate before quiz screen
-        st.rerun();
-    else:
-        st.subheader(f"Select Sheet:")
-        cols_sheet = st.columns(4); col_idx_sheet = 0;
-        for sheet_name in available_sheets_for_cat:
-             button_col_sheet = cols_sheet[col_idx_sheet % len(cols_sheet)];
-             with button_col_sheet:
-                 # Use partial or lambda if args needed directly for on_click
-                 st.button(sheet_name, key=f"sheet_{category}_{sheet_name}", on_click=start_quiz, args=(category, sheet_name,))
-             col_idx_sheet += 1
-
-# == Quiz Screen ==
-elif current_screen == 'quiz':
-    # Check if questions are loaded, if not, try loading them
-    if not st.session_state.get('quiz_questions'):
-        print(f"DEBUG: Quiz questions empty on entering Quiz Screen for {st.session_state.selected_category}-{st.session_state.selected_sheet}, attempting load...")
-        start_quiz(st.session_state.selected_category, st.session_state.selected_sheet) # Try loading again
-
-    # Now display quiz UI using questions from session state
-    questions_to_run = st.session_state.get('quiz_questions', [])
+# --- Quiz Display Area ---
+elif st.session_state.quiz_active:
     st.header(f"Quiz: {st.session_state.selected_category} - {st.session_state.selected_sheet}")
     col_top1, col_top2, col_top3 = st.columns([1.5, 1.5, 5]);
+    # Use reset_and_select_category for Stop button
     with col_top1: st.button("⬅️ Stop & Change Quiz", key="stop_quiz", on_click=reset_and_select_category)
-    with col_top2: st.button("Finish Early", key="finish_quiz", on_click=finish_quiz)
+    with col_top2: st.button("Finish Quiz Now", key="finish_quiz", on_click=finish_quiz)
     st.markdown("---")
-    print(f"DEBUG: Rendering Quiz Screen. Questions in state: {len(questions_to_run)}")
 
-    if not questions_to_run: st.warning("No questions available for this section.")
+    questions_to_run = st.session_state.quiz_questions
+    num_questions = len(questions_to_run)
+    q_index = st.session_state.current_q_index
+    print(f"DEBUG: Rendering Quiz Screen. Index: {q_index}, Total Qs: {num_questions}") # Debug
+
+    if not questions_to_run: st.warning("No questions loaded.")
+    # Check if index is past the end (quiz finished)
+    elif q_index >= num_questions:
+        st.info("Quiz finished! Processing results...") # Should transition to results screen
+        st.session_state.quiz_active = False
+        st.session_state.quiz_complete = True
+        st.rerun() # Explicit rerun needed here to force screen change
     else:
-        num_questions = len(questions_to_run); q_index = st.session_state.current_q_index;
-        if q_index >= num_questions: # Quiz finished condition
-             st.session_state.quiz_complete = True; st.session_state.quiz_active = False; st.rerun();
-        else:
-            current_q = questions_to_run[q_index]; st.subheader(f"Question {q_index + 1}/{num_questions}"); st.markdown(f"**{current_q['question']}**");
-            options_key = f"options_{q_index}"; # Use dynamic key for options per question
-            if options_key not in st.session_state: options = current_q['options'][:]; random.shuffle(options); st.session_state[options_key] = options;
-            options_to_display = st.session_state[options_key]; question_submitted = st.session_state.submission_status.get(q_index, False); disable_radio = question_submitted;
-            current_selection = st.session_state.user_answers.get(q_index, None); current_index = None;
-            if current_selection is not None and current_selection in options_to_display:
-                 # Correctly indented try/except block
-                 try:
-                     current_index = options_to_display.index(current_selection)
-                 except ValueError:
-                     current_index = None # Handle case where selection isn't in options (shouldn't happen often)
+        # Display current question UI
+        current_q = questions_to_run[q_index]; st.subheader(f"Question {q_index + 1}/{num_questions}"); st.markdown(f"**{current_q['question']}**");
+        options_key = f"options_{q_index}";
+        if options_key not in st.session_state: options = current_q['options'][:]; random.shuffle(options); st.session_state[options_key] = options;
+        options_to_display = st.session_state[options_key]; question_submitted = st.session_state.submission_status.get(q_index, False); disable_radio = question_submitted;
+        current_selection = st.session_state.user_answers.get(q_index, None); current_index = None;
+        radio_key = f'quiz_option_{q_index}' # Unique key for radio
+        if current_selection is not None and current_selection in options_to_display: try: current_index = options_to_display.index(current_selection); except ValueError: current_index = None;
 
-            # Use unique key for radio button tied to question index
-            radio_key = f'quiz_option_{q_index}'
-            user_choice = st.radio("Select:", options=options_to_display, index=current_index, key=radio_key, disabled=disable_radio, label_visibility="collapsed");
+        user_choice = st.radio("Select:", options=options_to_display, index=current_index, key=radio_key, disabled=disable_radio, label_visibility="collapsed");
 
-            col_btn1, col_btn2 = st.columns([0.2, 0.8]);
-            with col_btn1:
-                if not question_submitted: submit_button = st.button("Submit", key=f"submit_{q_index}", on_click=submit_answer, disabled=(st.session_state.get(radio_key) is None));
-            if question_submitted:
-                 with col_btn2: button_label = "Next >>" if q_index < num_questions - 1 else "See Results"; next_button = st.button(button_label, key=f"next_{q_index}", on_click=next_question);
-            if question_submitted: # Feedback
-                st.markdown("---"); user_ans = st.session_state.user_answers.get(q_index, None); correct_ans = current_q['correct_answer'];
-                if user_ans is not None:
-                    if user_ans == correct_ans: st.success(f"**Correct!** {correct_ans}");
-                    else: st.error(f"**Incorrect.** You: {user_ans}"); st.info(f"**Correct:** {correct_ans}");
+        # Submit/Next Buttons
+        col_btn1, col_btn2 = st.columns([0.2, 0.8]);
+        with col_btn1:
+            if not question_submitted: submit_button = st.button("Submit", key=f"submit_{q_index}", on_click=submit_answer, disabled=(st.session_state.get(radio_key) is None));
+        if question_submitted:
+             with col_btn2: button_label = "Next >>" if q_index < num_questions - 1 else "See Results"; next_button = st.button(button_label, key=f"next_{q_index}", on_click=next_question);
+        # Feedback
+        if question_submitted:
+            st.markdown("---"); user_ans = st.session_state.user_answers.get(q_index, None); correct_ans = current_q['correct_answer'];
+            if user_ans is not None:
+                if user_ans == correct_ans: st.success(f"**Correct!** {correct_ans}");
+                else: st.error(f"**Incorrect.** You: {user_ans}"); st.info(f"**Correct:** {correct_ans}");
 
-            # --- Question Navigation Buttons ---
-            st.markdown("---"); st.write("**Navigate Questions:**");
-            cols_per_row = 10; num_rows = (num_questions + cols_per_row - 1) // cols_per_row; nav_cols = st.columns(cols_per_row);
-            for i in range(num_questions):
-                 col = nav_cols[i % cols_per_row]; q_num = i + 1; button_type = "primary" if i == q_index else "secondary";
-                 is_submitted = st.session_state.submission_status.get(i, False);
-                 button_label = str(q_num); # Default label is number
-                 if is_submitted: is_correct = st.session_state.user_answers.get(i) == questions_to_run[i]['correct_answer']; button_label = f"{q_num} {'✅' if is_correct else '❌'}";
-                 with col: st.button(button_label, key=f"nav_{i}", on_click=go_to_question, args=(i,), type=button_type, use_container_width=True);
+        # --- Question Navigation Buttons ---
+        st.markdown("---"); st.write("**Navigate Questions:**");
+        cols_per_row = 10; num_rows = (num_questions + cols_per_row - 1) // cols_per_row; nav_cols = st.columns(cols_per_row);
+        for i in range(num_questions):
+             col = nav_cols[i % cols_per_row]; q_num = i + 1; button_type = "primary" if i == q_index else "secondary";
+             is_submitted = st.session_state.submission_status.get(i, False);
+             button_label = str(q_num);
+             if is_submitted: is_correct = st.session_state.user_answers.get(i) == questions_to_run[i]['correct_answer']; button_label = f"{q_num} {'✅' if is_correct else '❌'}";
+             with col: st.button(button_label, key=f"nav_{i}", on_click=go_to_question, args=(i,), type=button_type, use_container_width=True);
 
-    # Sidebar score display during quiz
+    # Sidebar score display
     st.sidebar.header("Score"); current_score = max(0, st.session_state.get('score', 0)); total_qs_in_state = len(st.session_state.get('quiz_questions', []));
     st.sidebar.metric("Current Score", f"{current_score} / {total_qs_in_state if total_qs_in_state > 0 else 'N/A'}");
 
 
-# == Results Screen ==
-elif current_screen == 'results': # Check using variable
+# --- Results Display Area ---
+elif st.session_state.quiz_complete:
     st.header("🎉 Quiz Complete! 🎉"); category = st.session_state.selected_category; sheet = st.session_state.selected_sheet;
     st.markdown(f"Category: **{category}** | Sheet: **{sheet}**") if category and sheet else None;
     num_questions = len(st.session_state.get('quiz_questions', [])); final_score = min(st.session_state.get('score', 0), num_questions);
@@ -324,7 +301,9 @@ elif current_screen == 'results': # Check using variable
     else: st.write("No questions completed.");
 
     col1, col2 = st.columns(2);
-    with col1: st.button("Take Another Quiz", key="restart", on_click=reset_and_select_category); # Reset and go to category select
+    with col1:
+        # Use reset_and_select_category to go back to the start screen
+        st.button("Take Another Quiz", key="restart", on_click=reset_and_select_category);
 
     with st.expander("Review Your Answers"):
          questions_answered = st.session_state.get('quiz_questions', []); answers_given = st.session_state.get('user_answers', {});
