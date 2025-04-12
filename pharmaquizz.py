@@ -4,7 +4,8 @@ import pandas as pd
 # Load CSV file
 @st.cache_data
 def load_data():
-    df = pd.read_csv('/Users/user/Downloads/Python scripts/QUIZ/quiz_data_v2.csv')
+    url = 'https://raw.githubusercontent.com/MidoN37/pharma-quiz-app/main/QUIZ/quiz_data_v2.csv'
+    df = pd.read_csv(url)
     return df
 
 df = load_data()
