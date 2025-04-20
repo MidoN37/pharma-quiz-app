@@ -171,7 +171,9 @@ if not st.session_state.current_quiz_df.empty and not st.session_state.show_resu
     options_key = q_index # Use index as key
     if options_key not in st.session_state.current_quiz_options:
         option_cols = [f'Option_{i}' for i in range(1, 6) if f'Option_{i}' in question and pd.notna(question[f'Option_{i}']) and question[f'Option_{i}']]
-        options = [question[col] for col in option_cols]
+        options = [question[col] for col in option_cols] + [question['CorrectAnswer']] # Make sure correct answer is included
+        # Remove potential duplicates if CorrectAnswer was also listed as Option_X
+        options = list(pd.Series(options).drop_duplicates().dropna())
         random.shuffle(options)
         st.session_state.current_quiz_options[options_key] = options
     options_to_display = st.session_state.current_quiz_options[options_key]
@@ -206,7 +208,22 @@ if not st.session_state.current_quiz_df.empty and not st.session_state.show_resu
         else:
             st.error(f"Incorrect! Correct answer: {correct_answer_text}")
 
-    # --- Navigation Buttons ---
+    # --- Add Previous/Next Buttons --- # <--- MODIFIED SECTION START
+    st.markdown("---") # Optional separator
+    nav_cols_prev_next = st.columns([1, 1]) # Create two columns of equal size
+
+    with nav_cols_prev_next[0]: # Left column for Previous
+        if st.button("⬅️ Previous", use_container_width=True, disabled=(q_index <= 0)):
+            st.session_state.question_index -= 1
+            st.rerun()
+
+    with nav_cols_prev_next[1]: # Right column for Next
+        if st.button("Next ➡️", use_container_width=True, disabled=(q_index >= total_questions - 1)):
+            st.session_state.question_index += 1
+            st.rerun()
+    # --- MODIFIED SECTION END ---
+
+    # --- Navigation Buttons (Numbered) ---
     st.markdown("---")
     st.write("**Navigate Questions:**")
     cols_per_row = 10
