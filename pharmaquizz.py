@@ -134,10 +134,10 @@ if __name__ == "__main__":
         idx = st.session_state.question_index
         question = df.iloc[idx]
 
+        # 1. Question number
         st.subheader(f"Question {idx + 1} of {total}")
-        st.write(question['Question'])
 
-        # Display Image If Available
+        # 2. Image display
         if not df_images.empty:
             med = question['MedicationName'].strip().lower()
             cat = st.session_state.selected_category.strip().lower()
@@ -148,9 +148,29 @@ if __name__ == "__main__":
             if not img_row.empty:
                 url = img_row.iloc[0]['raw_url']
                 if pd.notna(url) and url:
-                    st.image(url, caption=f"Image of {question['MedicationName']}", use_column_width=True)
+                    st.image(url, caption=f"Image of {question['MedicationName']}", use_container_width=True)
 
-        # Navigation Buttons
+        # 3. Question text
+        st.write(question['Question'])
+
+        # 4. Answer options
+        opt_cols = [f'Option_{i}' for i in range(1, 6) if f'Option_{i}' in question and question[f'Option_{i}']]
+        opts = [question[col] for col in opt_cols] + [question['CorrectAnswer']]
+        opts = list(pd.Series(opts).drop_duplicates().dropna())
+        random.shuffle(opts)
+        selected = st.radio("Your answer:", opts,
+                            index=opts.index(st.session_state.answers.get(idx))
+                                  if idx in st.session_state.answers and st.session_state.answers[idx] in opts else 0)
+
+        # 5. Submit answer button
+        if st.button("Submit Answer"):
+            st.session_state.answers[idx] = selected
+            if selected == question['CorrectAnswer']:
+                st.success("Correct!")
+            else:
+                st.error(f"Incorrect! The correct answer is: {question['CorrectAnswer']}")
+
+        # 6. Next/Previous buttons
         prev_col, next_col = st.columns([1, 1])
         with prev_col:
             if st.button("⬅️ Previous", disabled=(idx <= 0)):
@@ -161,6 +181,7 @@ if __name__ == "__main__":
                 st.session_state.question_index += 1
                 st.rerun()
 
+        # 7. Go to question section
         st.markdown("---")
         st.write("**Go to question:**")
         cols_nav = st.columns(min(total, 10))
@@ -168,38 +189,24 @@ if __name__ == "__main__":
             col = cols_nav[i % len(cols_nav)]
             label = str(i + 1)
             if i in st.session_state.answers:
-                is_correct = (st.session_state.answers[i] == df.iloc[i]['CorrectAnswer'])
-                label += " ✅" if is_correct else " ❌"
+                is_corr = (st.session_state.answers[i] == df.iloc[i]['CorrectAnswer'])
+                label += " ✅" if is_corr else " ❌"
             if col.button(label, key=f"nav_{i}"):
                 st.session_state.question_index = i
                 st.rerun()
 
-        opt_cols = [f'Option_{i}' for i in range(1, 6) if f'Option_{i}' in question and question[f'Option_{i}']]
-        opts = [question[col] for col in opt_cols] + [question['CorrectAnswer']]
-        opts = list(pd.Series(opts).drop_duplicates().dropna())
-        random.shuffle(opts)
-
-        selected = st.radio("Your answer:", opts,
-                            index=opts.index(st.session_state.answers.get(idx))
-                                  if idx in st.session_state.answers and st.session_state.answers[idx] in opts else 0)
-        if st.button("Submit Answer"):
-            st.session_state.answers[idx] = selected
-            if selected == question['CorrectAnswer']:
-                st.success("Correct!")
-            else:
-                st.error(f"Incorrect! The correct answer is: {question['CorrectAnswer']}")
-
+        # 8. Finish quiz button
         st.markdown("---")
         if st.button("Finish Quiz and See Results"):
             st.session_state.show_result = True
             st.rerun()
 
+    # --- Results View ---
     elif st.session_state.show_result:
         df = st.session_state.current_quiz_df
         total = len(df)
         correct = sum(1 for i in range(total) if st.session_state.answers.get(i) == df.iloc[i]['CorrectAnswer'])
-        incorrect = sum(1 for i in range(total) if i in st.session_state.answers and \
-                        st.session_state.answers[i] != df.iloc[i]['CorrectAnswer'])
+        incorrect = sum(1 for i in range(total) if i in st.session_state.answers and st.session_state.answers[i] != df.iloc[i]['CorrectAnswer'])
         unanswered = total - len(st.session_state.answers)
 
         st.subheader("Quiz Results")
