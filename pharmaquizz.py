@@ -227,9 +227,22 @@ if __name__ == "__main__":
                 sel = st.session_state.answers.get(i, "Not Answered")
                 corr_ans = q['CorrectAnswer']
                 icon = "✅" if sel == corr_ans else ("❌" if sel != "Not Answered" else "❓")
+                # Show image in review
+                if not df_images.empty:
+                    med = q['MedicationName'].strip().lower()
+                    cat = st.session_state.selected_category.strip().lower()
+                    img_row = df_images[
+                        (df_images['category'].str.strip().str.lower() == cat) &
+                        (df_images['filename'].apply(lambda f: Path(f).stem.lower()) == med)
+                    ]
+                    if not img_row.empty:
+                        url = img_row.iloc[0]['raw_url']
+                        if pd.notna(url) and url:
+                            st.image(url, caption=f"Image of {q['MedicationName']}", use_container_width=True)
                 st.markdown(f"**Q{i+1}:** {q['Question']}")
                 st.write(f"Your answer: {sel} {icon}")
-                if sel != corr_ans and sel != "Not Answered":
+                # Always show correct answer if not correct
+                if sel != corr_ans:
                     st.write(f"Correct answer: {corr_ans}")
                 st.divider()
     else:
