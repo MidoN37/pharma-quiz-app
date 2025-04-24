@@ -1,18 +1,17 @@
 import streamlit as st
 import pandas as pd
 import random
-import unicodedata # Keep if used elsewhere, seems unused here
-import re # Keep if used elsewhere, seems unused here
+import unicodedata
+import re # Keep if used elsewhere
 from pathlib import Path
 
 # --- Page Config ---
 st.set_page_config(layout="wide", page_title="Pharm Quiz")
 
 # --- Project Setup & File Paths ---
-# Use absolute path resolution relative to the script file
 try:
     APP_DIR = Path(__file__).parent
-except NameError: # Handle cases where __file__ is not defined (e.g., running in some environments)
+except NameError:
     APP_DIR = Path.cwd()
 PROJECT_ROOT = APP_DIR
 QUIZ_CSV_PATH = PROJECT_ROOT / "QUIZ" / "quiz_data_v2.csv"
@@ -26,7 +25,6 @@ def load_quiz_data(path):
             st.error(f"Quiz data CSV not found: {path}")
             return None
         try:
-            # Try utf-8 first as it's more common, fallback to utf-8-sig
             df = pd.read_csv(path, keep_default_na=False, encoding='utf-8')
         except UnicodeDecodeError:
             df = pd.read_csv(path, keep_default_na=False, encoding='utf-8-sig')
@@ -38,6 +36,11 @@ def load_quiz_data(path):
         if not all(col in df.columns for col in required):
             st.error(f"CSV missing required columns. Need at least: {required}. Found: {list(df.columns)}")
             return None
+        # Add optional columns if they don't exist
+        for i in range(1, 6):
+            col_name = f'Option_{i}'
+            if col_name not in df.columns:
+                df[col_name] = None # Or pd.NA
         return df
     except Exception as e:
         st.error(f"Failed to load/parse quiz CSV: {e}")
@@ -49,7 +52,7 @@ def load_image_data(path):
     try:
         if not path.exists():
             st.warning(f"Image data CSV not found: {path}. Images based on MedicationName might not load.")
-            return pd.DataFrame(columns=['category', 'filename', 'raw_url']) # Return empty DF with expected cols
+            return pd.DataFrame(columns=['category', 'filename', 'raw_url'])
         try:
             df = pd.read_csv(path, encoding='utf-8')
         except UnicodeDecodeError:
@@ -62,6 +65,9 @@ def load_image_data(path):
         if not all(col in df.columns for col in required):
             st.error(f"Image CSV missing required columns. Required: {required}. Found: {list(df.columns)}")
             return pd.DataFrame(columns=['category', 'filename', 'raw_url'])
+        # Pre-normalize columns for faster lookup during quiz
+        df['_norm_cat'] = df['category'].astype(str).apply(normalize_text)
+        df['_norm_filename'] = df['filename'].astype(str).str.extract(r'([^/]+)\.[^.]*$', expand=False).fillna('').apply(normalize_text)
         return df
     except Exception as e:
         st.error(f"Error loading image CSV: {e}")
@@ -72,93 +78,58 @@ def get_override_url(category, sheet, med_name):
     base = (
         "https://raw.githubusercontent.com/MidoN37/pharma-data-viewer/refs/heads/master/assets/images"
     )
-    # Handle potential None or non-string inputs gracefully
     cat = str(category).strip() if category else ""
     med = str(med_name).strip() if med_name else ""
     sheet_lower = str(sheet).strip().lower() if sheet else ""
 
-    # Antibiotiques overrides by sheet
     if cat == "Antibiotiques":
-        if sheet_lower == "comprime":
-            return f"{base}/Antibiotiques/Antiobiotiques%20Comprimes.jpg"
-        if sheet_lower == "sachet":
-            return f"{base}/Antibiotiques/Antibiotiques%20Sachet.jpg"
-        if sheet_lower == "sirop":
-            return f"{base}/Antibiotiques/Antibiotiques%20Sirop.jpg"
-    # Sirop category override
-    if cat == "Sirop":
-        return f"{base}/Sirops/Sirop%20Tout.jpg"
-    # Suppositoires override by first letter
+        if sheet_lower == "comprime": return f"{base}/Antibiotiques/Antiobiotiques%20Comprimes.jpg"
+        if sheet_lower == "sachet": return f"{base}/Antibiotiques/Antibiotiques%20Sachet.jpg"
+        if sheet_lower == "sirop": return f"{base}/Antibiotiques/Antibiotiques%20Sirop.jpg"
+    if cat == "Sirop": return f"{base}/Sirops/Sirop%20Tout.jpg"
     if cat == "Suppositoires":
         first = med[0].upper() if med else ''
-        if 'A' <= first <= 'N':
-            return f"{base}/Suppositoires/Suppositoires.jpeg"
-        elif first: # Check if first character exists before comparing
-             return f"{base}/Suppositoires/Suppositoires%202.jpeg"
-        # else: # Optional: handle case where med name is empty or doesn't start with a letter
-        #     return None # Or a default suppository image?
-
-    return None # No override found
+        if 'A' <= first <= 'N': return f"{base}/Suppositoires/Suppositoires.jpeg"
+        elif first: return f"{base}/Suppositoires/Suppositoires%202.jpeg"
+    return None
 
 # --- Normalize function for matching ---
 def normalize_text(text):
-    """Normalize text by lowercasing, removing accents, and extra whitespace."""
-    if not isinstance(text, str):
-        return ""
-    # NFKD decomposition separates characters from accents
+    if not isinstance(text, str): return ""
     text = unicodedata.normalize('NFKD', text).encode('ASCII', 'ignore').decode('ASCII')
-    text = text.lower().strip()
-    # Optional: remove punctuation or specific characters if needed
-    # text = re.sub(r'[^\w\s]', '', text)
-    return text
+    return text.lower().strip()
 
 # --- Get Image URL (handles overrides and lookups) ---
 def get_image_url(df_images, category, sheet, med_name):
-    """Gets the appropriate image URL, checking overrides first."""
     override = get_override_url(category, sheet, med_name)
-    if override:
-        return override
+    if override: return override
+    if df_images.empty or not med_name or not category: return None
 
-    if df_images.empty or not med_name or not category:
-        return None
-
-    # Normalize for robust matching
     norm_med = normalize_text(med_name)
     norm_cat = normalize_text(category)
 
-    # Prepare image dataframe for matching (normalize once if possible, maybe cache this?)
-    # Adding a temporary normalized column for matching
-    df_images['_norm_cat'] = df_images['category'].apply(normalize_text)
-    # Extract filename without extension and normalize
-    df_images['_norm_filename'] = df_images['filename'].str.extract(r'([^/]+)\.[^.]*$', expand=False).fillna('').apply(normalize_text)
-
-
-    # Find matching rows
+    # Use pre-normalized columns for matching
     img_row = df_images[
         (df_images['_norm_cat'] == norm_cat) &
         (df_images['_norm_filename'] == norm_med)
     ]
 
-    # Clean up temporary columns if needed, though leaving them might be fine
-    # df_images.drop(columns=['_norm_cat', '_norm_filename'], inplace=True)
-
     if not img_row.empty:
         return img_row.iloc[0]['raw_url']
-
     return None
 
 # --- Display Image ---
-def display_image(url):
-    """Displays the image from a URL using Markdown."""
+def display_image(url, container):
+    """Displays the image from a URL inside a specific container."""
     if url:
-        st.markdown(f'<a href="{url}" target="_blank"><img src="{url}" alt="Medication Image" style="max-width:100%; max-height: 400px; object-fit: contain;"/></a>', unsafe_allow_html=True)
+        container.markdown(f'<a href="{url}" target="_blank"><img src="{url}" alt="Medication Image" style="max-width:100%; max-height: 450px; object-fit: contain; margin-top: 20px;"/></a>', unsafe_allow_html=True)
     # else:
-    #     st.write("_(No image available)_") # Optional placeholder
+    #     container.write("_(No image available)_")
 
 # --- Main Execution ---
 if __name__ == "__main__":
     df_all = load_quiz_data(QUIZ_CSV_PATH)
-    df_images = load_image_data(IMAGE_CSV_PATH) # Load images once
+    df_images = load_image_data(IMAGE_CSV_PATH)
 
     if df_all is None:
         st.error("Quiz data could not be loaded. Stopping application.")
@@ -166,280 +137,207 @@ if __name__ == "__main__":
 
     # Initialize session state keys reliably
     default_values = {
-        'selected_category': None,
-        'selected_sheet': None,
-        'question_index': 0,
-        'answers': {}, # Stores user's selected answer for each question index
-        'show_result': False,
-        'current_quiz_df': pd.DataFrame(),
-        'current_quiz_options': {}, # *** NEW: Stores shuffled options for each question index
-        'quiz_loaded': False # Flag to indicate if a quiz is active
+        'selected_category': None, 'selected_sheet': None, 'question_index': 0,
+        'answers': {}, 'show_result': False, 'current_quiz_df': pd.DataFrame(),
+        'current_quiz_options': {}, 'quiz_loaded': False
     }
     for key, default_value in default_values.items():
         st.session_state.setdefault(key, default_value)
 
     # --- Sidebar ---
     st.sidebar.title("Quiz Settings")
-
     categories = sorted(df_all['Category'].unique()) if not df_all.empty else []
-
-    # Use the session state value directly if it exists, otherwise default
     current_selection_cat = st.session_state.selected_category
     if current_selection_cat not in categories and categories:
-        current_selection_cat = categories[0] # Default to first if invalid or None
-
+        current_selection_cat = categories[0]
     selected_cat = st.sidebar.selectbox(
-        "Select Category",
-        options=categories,
+        "Select Category", options=categories,
         index=categories.index(current_selection_cat) if current_selection_cat in categories else 0,
-        key='sb_cat' # Keep key if needed for other logic, though direct state access is often cleaner
+        key='sb_cat'
     )
-
-    # --- State Reset Logic ---
-    # Check if category selection changed
     if selected_cat != st.session_state.selected_category:
         st.session_state.selected_category = selected_cat
-        # Reset dependent states
-        st.session_state.selected_sheet = None
-        st.session_state.current_quiz_df = pd.DataFrame()
-        st.session_state.question_index = 0
-        st.session_state.answers = {}
-        st.session_state.show_result = False
-        st.session_state.current_quiz_options = {}
-        st.session_state.quiz_loaded = False
-        st.rerun() # Rerun to update sheet options and main page
+        st.session_state.update({
+            'selected_sheet': None, 'current_quiz_df': pd.DataFrame(), 'question_index': 0,
+            'answers': {}, 'show_result': False, 'current_quiz_options': {}, 'quiz_loaded': False
+        })
+        st.rerun()
 
-    # --- Sheet Selection ---
     if st.session_state.selected_category:
         available_sheets = sorted(df_all[df_all['Category'] == st.session_state.selected_category]['Sheet'].unique())
-
-        # Auto-select sheet if only one is available
         if len(available_sheets) == 1 and st.session_state.selected_sheet != available_sheets[0]:
              st.session_state.selected_sheet = available_sheets[0]
-             # Reset quiz state if sheet changes automatically
-             st.session_state.current_quiz_df = pd.DataFrame()
-             st.session_state.question_index = 0
-             st.session_state.answers = {}
-             st.session_state.show_result = False
-             st.session_state.current_quiz_options = {}
-             st.session_state.quiz_loaded = False
-             # No rerun needed here usually, sidebar write updates fine. If issues, add rerun.
-
+             st.session_state.update({
+                 'current_quiz_df': pd.DataFrame(), 'question_index': 0, 'answers': {},
+                 'show_result': False, 'current_quiz_options': {}, 'quiz_loaded': False
+             })
+             # No rerun needed here usually
 
         if len(available_sheets) > 1:
-            # Prepare options for sheet selection, adding a placeholder
             sheet_options = ["-- Select Sheet --"] + available_sheets
             current_selection_sheet = st.session_state.selected_sheet
-            # Ensure the current selection is valid, otherwise default to placeholder
             try:
                 current_index_sheet = sheet_options.index(current_selection_sheet) if current_selection_sheet else 0
             except ValueError:
-                current_index_sheet = 0 # Default to placeholder if state holds an invalid value
-
+                current_index_sheet = 0
             selected_sheet_option = st.sidebar.selectbox(
-                "Select Sheet",
-                options=sheet_options,
-                index=current_index_sheet,
-                key='sb_sheet'
+                "Select Sheet", options=sheet_options, index=current_index_sheet, key='sb_sheet'
             )
-
-            # Update state only if a valid sheet (not the placeholder) is chosen and it's different
             new_selected_sheet = selected_sheet_option if selected_sheet_option != "-- Select Sheet --" else None
             if new_selected_sheet != st.session_state.selected_sheet:
                 st.session_state.selected_sheet = new_selected_sheet
-                # Reset quiz state when sheet changes
-                st.session_state.current_quiz_df = pd.DataFrame()
-                st.session_state.question_index = 0
-                st.session_state.answers = {}
-                st.session_state.show_result = False
-                st.session_state.current_quiz_options = {}
-                st.session_state.quiz_loaded = False
+                st.session_state.update({
+                    'current_quiz_df': pd.DataFrame(), 'question_index': 0, 'answers': {},
+                    'show_result': False, 'current_quiz_options': {}, 'quiz_loaded': False
+                })
                 st.rerun()
-
         elif len(available_sheets) == 1:
             st.sidebar.write(f"Sheet: **{available_sheets[0]}** (Auto-selected)")
-            # Ensure state reflects auto-selection (already done above)
         else:
             st.sidebar.warning("No sheets found for this category.")
-            st.session_state.selected_sheet = None # Ensure it's None if no sheets
+            st.session_state.selected_sheet = None
 
-    # --- Load/Restart Button ---
     start_disabled = not (st.session_state.selected_category and st.session_state.selected_sheet)
     if st.sidebar.button("Load / Restart Quiz", disabled=start_disabled, type="primary"):
         if st.session_state.selected_category and st.session_state.selected_sheet:
             filtered = df_all[
                 (df_all['Category'] == st.session_state.selected_category) &
                 (df_all['Sheet'] == st.session_state.selected_sheet)
-            ].copy() # Use copy to avoid SettingWithCopyWarning if modifying later
-
+            ].copy()
             if not filtered.empty:
                 st.session_state.current_quiz_df = filtered.sample(frac=1).reset_index(drop=True)
-                # Reset all quiz-specific states
-                st.session_state.question_index = 0
-                st.session_state.answers = {}
-                st.session_state.show_result = False
-                st.session_state.current_quiz_options = {} # Clear stored options
-                st.session_state.quiz_loaded = True # Mark quiz as loaded
-                st.rerun() # Start the quiz display
+                st.session_state.update({
+                    'question_index': 0, 'answers': {}, 'show_result': False,
+                    'current_quiz_options': {}, 'quiz_loaded': True
+                })
+                st.rerun()
             else:
                 st.sidebar.error("No questions found for this selection.")
                 st.session_state.quiz_loaded = False
         else:
              st.sidebar.error("Please select both category and sheet.")
              st.session_state.quiz_loaded = False
-
-
-    st.sidebar.markdown("---") # Use sidebar markdown
+    st.sidebar.markdown("---")
 
     # --- Main Quiz Area ---
     st.title("💊 Pharm Quiz App")
     st.markdown("---")
 
-    # Quiz flow: Only proceed if a quiz is loaded and results are not shown
     if st.session_state.quiz_loaded and not st.session_state.show_result:
         df = st.session_state.current_quiz_df
         total_questions = len(df)
         current_q_index = st.session_state.question_index
 
-        # Check if index is valid (it should be, but safety check)
         if 0 <= current_q_index < total_questions:
             question_data = df.iloc[current_q_index]
+            med_name = question_data.get('MedicationName', '') # Get med_name early
 
-            # Display Question Number
-            st.subheader(f"Question {current_q_index + 1} of {total_questions}")
-
-            # Display Image (using the helper function)
-            med_name = question_data.get('MedicationName', '')
+            # --- Determine Image URL FIRST ---
             image_url = get_image_url(df_images, st.session_state.selected_category, st.session_state.selected_sheet, med_name)
-            display_image(image_url)
+
+            # --- Create Columns for Layout ---
+            left_col, right_col = st.columns([2, 1]) # Content on left (wider), Image on right
+
+            # --- Right Column: Image ---
+            with right_col:
+                display_image(image_url, st) # Pass st (or right_col) to display_image
+
+            # --- Left Column: Question Content ---
+            with left_col:
+                # Display Question Number
+                st.subheader(f"Question {current_q_index + 1} of {total_questions}")
+
+                # Display Question Text (Removed Category/Sheet/Medication explicit labels)
+                st.markdown(f"**Question:**")
+                st.markdown(f"#### {question_data['Question']}") # Make question slightly larger
 
 
-            # Display Question Text
-            st.write(f"**Category:** {st.session_state.selected_category} | **Sheet:** {st.session_state.selected_sheet}")
-            if med_name: # Display med name if available
-                 st.write(f"**Medication:** {med_name}")
-            st.markdown(f"**Question:** {question_data['Question']}")
+                # --- Generate and Display Options (Logic remains the same) ---
+                if current_q_index not in st.session_state.current_quiz_options:
+                    correct_answer = question_data['CorrectAnswer']
+                    # Ensure options columns exist before accessing
+                    options = []
+                    for i in range(1, 6):
+                        col_name = f'Option_{i}'
+                        if col_name in question_data and pd.notna(question_data[col_name]) and question_data[col_name]:
+                             options.append(question_data[col_name])
 
+                    all_options = list(pd.Series(options + [correct_answer]).drop_duplicates().dropna())
+                    random.shuffle(all_options)
+                    st.session_state.current_quiz_options[current_q_index] = all_options
+                else:
+                    all_options = st.session_state.current_quiz_options[current_q_index]
 
-            # --- Generate and Display Options (Crucial Change) ---
-            # Check if options for this question are already generated and shuffled in session state
-            if current_q_index not in st.session_state.current_quiz_options:
-                # Generate options only ONCE per question load
-                correct_answer = question_data['CorrectAnswer']
-                options = [question_data.get(f'Option_{i}') for i in range(1, 6)]
-                options = [opt for opt in options if pd.notna(opt) and opt] # Filter out empty/NaN options
+                # --- Display Radio Buttons ---
+                previous_answer = st.session_state.answers.get(current_q_index)
+                default_index = None
+                if previous_answer is not None:
+                    try:
+                        default_index = all_options.index(previous_answer)
+                    except ValueError:
+                        default_index = None # Answer not in current options (safety)
 
-                # Combine options and correct answer, ensure uniqueness
-                all_options = list(pd.Series(options + [correct_answer]).drop_duplicates().dropna())
+                user_choice = st.radio(
+                    "Select your answer:",
+                    options=all_options,
+                    index=default_index,
+                    key=f"q_{current_q_index}_options"
+                )
 
-                # Shuffle the options ONCE
-                random.shuffle(all_options)
+                # --- Submit Button and Feedback Area ---
+                submit_pressed = st.button("Submit Answer", key=f"submit_{current_q_index}")
 
-                # Store the shuffled options in session state for this question index
-                st.session_state.current_quiz_options[current_q_index] = all_options
-            else:
-                # Retrieve the already shuffled options from session state
-                all_options = st.session_state.current_quiz_options[current_q_index]
+                # Display feedback below the submit button IN the left column
+                if current_q_index in st.session_state.answers:
+                    stored_answer = st.session_state.answers[current_q_index]
+                    correct_answer = question_data['CorrectAnswer']
+                    if stored_answer == correct_answer:
+                        st.success("Correct! ✅")
+                    else:
+                        st.error(f"Incorrect! The correct answer is: **{correct_answer}** ❌")
 
-            # --- Display Radio Buttons (Crucial Change) ---
-            # Determine the default selection index for radio button
-            previous_answer = st.session_state.answers.get(current_q_index)
-            try:
-                 # If an answer was previously submitted, find its index in the *current* options list
-                 default_index = all_options.index(previous_answer) if previous_answer is not None else None
-            except ValueError:
-                 # Handle case where a saved answer might not be in the current options (shouldn't happen with this logic, but safe)
-                 default_index = None
+                if submit_pressed:
+                    st.session_state.answers[current_q_index] = user_choice
+                    st.rerun() # Rerun to show feedback and update nav icons
 
-
-            # Use index=None for no default selection if not answered before
-            # Add a unique key based on the question index to prevent state conflicts
-            user_choice = st.radio(
-                "Select your answer:",
-                options=all_options,
-                index=default_index, # Set to None for no initial selection or index of previous answer
-                key=f"q_{current_q_index}_options" # Unique key for the radio widget
-            )
-
-            # --- Submit Button and Answer Handling ---
-            submit_col, feedback_col = st.columns([1, 3]) # Allocate space
-
-            with submit_col:
-                 submit_pressed = st.button("Submit Answer", key=f"submit_{current_q_index}")
-
-            with feedback_col:
-                 # Display feedback ONLY if the answer for *this specific question* has been submitted
-                 if current_q_index in st.session_state.answers:
-                     stored_answer = st.session_state.answers[current_q_index]
-                     correct_answer = question_data['CorrectAnswer']
-                     if stored_answer == correct_answer:
-                         st.success("Correct! ✅")
-                     else:
-                         st.error(f"Incorrect! The correct answer is: **{correct_answer}** ❌")
-                 # else: # Optional: Placeholder while not submitted
-                 #     st.empty() # Or st.write("Select an answer and click Submit.")
-
-
-            # Process submission *after* rendering the radio button and button
-            if submit_pressed:
-                 # Store the selected answer when submit is pressed
-                 st.session_state.answers[current_q_index] = user_choice
-                 # Rerun to display feedback immediately and lock the radio button state visually
-                 st.rerun()
-
-
-            st.markdown("---") # Separator
-
-            # --- Navigation Buttons ---
-            col1, col2, col3 = st.columns([1, 1, 5]) # Adjust ratios as needed
-            with col1:
-                if st.button("⬅️ Previous", disabled=current_q_index <= 0):
+            # --- Navigation and Finish Buttons (BELOW the columns) ---
+            st.markdown("---") # Separator below columns
+            nav_col1, nav_col2 = st.columns(2)
+            with nav_col1:
+                if st.button("⬅️ Previous", disabled=current_q_index <= 0, use_container_width=True):
                     st.session_state.question_index -= 1
                     st.rerun()
-            with col2:
-                if st.button("Next ➡️", disabled=current_q_index >= total_questions - 1):
+            with nav_col2:
+                if st.button("Next ➡️", disabled=current_q_index >= total_questions - 1, use_container_width=True):
                     st.session_state.question_index += 1
                     st.rerun()
-            # col3 remains empty or for future use
 
             st.markdown("---")
-
-            # --- Go To Question Navigation ---
             st.write("**Go to question:**")
-            # Dynamically adjust columns based on total questions
-            num_nav_cols = min(total_questions, 10) # Max 10 columns for navigation buttons
+            num_nav_cols = min(total_questions, 10)
             nav_cols = st.columns(num_nav_cols)
-
             for i in range(total_questions):
-                nav_col = nav_cols[i % num_nav_cols] # Cycle through columns
+                nav_col = nav_cols[i % num_nav_cols]
                 q_label = str(i + 1)
                 q_state_icon = ""
                 if i in st.session_state.answers:
-                    # Check correctness based on stored answer and actual correct answer
                     is_correct = st.session_state.answers[i] == df.iloc[i]['CorrectAnswer']
                     q_state_icon = " ✅" if is_correct else " ❌"
-
-                # Determine button type: primary if current question, secondary otherwise
                 btn_type = "primary" if i == current_q_index else "secondary"
-
-                if nav_col.button(f"{q_label}{q_state_icon}", key=f"nav_{i}", type=btn_type):
+                if nav_col.button(f"{q_label}{q_state_icon}", key=f"nav_{i}", type=btn_type, use_container_width=True):
                     st.session_state.question_index = i
                     st.rerun()
 
-            st.markdown("---") # Separator
-
-            # --- Finish Quiz Button ---
-            if st.button("🏁 Finish Quiz and See Results"):
+            st.markdown("---")
+            if st.button("🏁 Finish Quiz and See Results", use_container_width=True):
                 st.session_state.show_result = True
                 st.rerun()
 
         else:
-            # Handle invalid question index (e.g., after data reload)
             st.warning("Invalid question index. Restarting quiz selection.")
             st.session_state.question_index = 0
-            st.session_state.quiz_loaded = False # Force reload
+            st.session_state.quiz_loaded = False
             st.rerun()
-
 
     # --- Results Page ---
     elif st.session_state.show_result:
@@ -447,21 +345,16 @@ if __name__ == "__main__":
         df = st.session_state.current_quiz_df
         total = len(df)
         answers = st.session_state.answers
-
         correct_count = 0
         incorrect_count = 0
         answered_indices = set(answers.keys())
 
         for i in range(total):
             if i in answered_indices:
-                if answers[i] == df.iloc[i]['CorrectAnswer']:
-                    correct_count += 1
-                else:
-                    incorrect_count += 1
-
+                if answers[i] == df.iloc[i]['CorrectAnswer']: correct_count += 1
+                else: incorrect_count += 1
         unanswered_count = total - len(answered_indices)
 
-        # Display Summary Stats
         res_col1, res_col2, res_col3, res_col4 = st.columns(4)
         res_col1.metric("✅ Correct", correct_count)
         res_col2.metric("❌ Incorrect", incorrect_count)
@@ -469,35 +362,26 @@ if __name__ == "__main__":
         score_percent = (correct_count / total * 100) if total > 0 else 0
         res_col4.metric("🏆 Score", f"{correct_count}/{total}", f"{score_percent:.1f}%")
 
-        if st.button("🚀 Start New Quiz (Same Settings)"):
-             # Reset only quiz progress, keep category/sheet
-            st.session_state.current_quiz_df = df.sample(frac=1).reset_index(drop=True) # Reshuffle
-            st.session_state.question_index = 0
-            st.session_state.answers = {}
-            st.session_state.show_result = False
-            st.session_state.current_quiz_options = {} # Clear stored options
-            st.session_state.quiz_loaded = True # It's loaded again
-            st.rerun()
-
-        if st.button("⚙️ Change Settings and Start New Quiz"):
-             # Reset everything except potentially category/sheet selection if desired
-             # For a full reset feeling:
-            st.session_state.question_index = 0
-            st.session_state.answers = {}
-            st.session_state.show_result = False
-            st.session_state.current_quiz_df = pd.DataFrame()
-            st.session_state.current_quiz_options = {}
-            st.session_state.quiz_loaded = False
-             # Optional: reset category/sheet too if you want user to re-select
-            # st.session_state.selected_category = None
-            # st.session_state.selected_sheet = None
-            st.rerun()
-
+        btn_col1, btn_col2 = st.columns(2)
+        with btn_col1:
+            if st.button("🚀 Start New Quiz (Same Settings)", use_container_width=True):
+                st.session_state.current_quiz_df = df.sample(frac=1).reset_index(drop=True) # Reshuffle
+                st.session_state.update({
+                    'question_index': 0, 'answers': {}, 'show_result': False,
+                    'current_quiz_options': {}, 'quiz_loaded': True
+                })
+                st.rerun()
+        with btn_col2:
+            if st.button("⚙️ Change Settings and Start New Quiz", use_container_width=True):
+                st.session_state.update({
+                    'question_index': 0, 'answers': {}, 'show_result': False,
+                    'current_quiz_df': pd.DataFrame(), 'current_quiz_options': {}, 'quiz_loaded': False
+                })
+                st.rerun()
 
         # --- Review Answers Expander ---
         with st.expander("🧐 Review Your Answers", expanded=False):
-            if total == 0:
-                st.write("No questions were loaded for review.")
+            if total == 0: st.write("No questions were loaded for review.")
             else:
                 for i in range(total):
                     question_data = df.iloc[i]
@@ -505,28 +389,25 @@ if __name__ == "__main__":
                     correct_answer = question_data['CorrectAnswer']
                     is_correct = user_answer == correct_answer
                     status_icon = ""
-                    if i in answered_indices:
-                        status_icon = "✅" if is_correct else "❌"
-                    else:
-                        status_icon = "❓"
+                    if i in answered_indices: status_icon = "✅" if is_correct else "❌"
+                    else: status_icon = "❓"
 
-
+                    # --- Layout for Review Items (Optional: could also use columns here) ---
                     st.markdown(f"**Question {i+1}:** {question_data['Question']}")
 
-                     # Display Image in review
+                    # Display Image in review
                     med_name = question_data.get('MedicationName', '')
+                    # Need a container (like st itself) to pass to display_image
+                    review_img_container = st.container() # Create a container for the image
                     image_url = get_image_url(df_images, st.session_state.selected_category, st.session_state.selected_sheet, med_name)
-                    display_image(image_url) # Use the consistent function
-
+                    display_image(image_url, review_img_container) # Display image inside the container
 
                     st.write(f"Your answer: **{user_answer}** {status_icon}")
-                    if not is_correct and i in answered_indices: # Show correct only if answered and wrong
+                    if not is_correct and i in answered_indices:
                         st.write(f"Correct answer: **{correct_answer}**")
                     elif user_answer == "Not Answered":
-                        st.write(f"Correct answer: **{correct_answer}**") # Also show if unanswered
-
-                    st.divider() # Use st.divider for visual separation
-
+                        st.write(f"Correct answer: **{correct_answer}**")
+                    st.divider()
 
     # --- Initial State Message ---
     elif not st.session_state.quiz_loaded:
